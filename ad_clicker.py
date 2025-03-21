@@ -2,21 +2,20 @@ import time
 import random
 import os
 import tempfile
-from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import (
     NoSuchElementException, 
     TimeoutException, 
     ElementNotInteractableException,
     StaleElementReferenceException,
     InvalidElementStateException,
-    WebDriverException
+    WebDriverException,
+    ElementClickInterceptedException  # Added import
 )
 
 class AdClicker:
@@ -33,22 +32,26 @@ class AdClicker:
         """Set up the Chrome WebDriver with appropriate options."""
         chrome_options = Options()
         
-        # Enable headless mode in CI environment
+        # Enable headless mode in CI environment with a fixed window size
         if os.getenv('CI') == 'true':
             chrome_options.add_argument("--headless")
-
-        #chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--window-size=1920,1080")  # Ensure consistent viewport
+        else:
+            chrome_options.add_argument("--start-maximized")
         
-        chrome_options.add_argument("--start-maximized")
         chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument("--disable-gpu")  # Helps with Windows issues
+        chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-popup-blocking")  # Allow popups
+        chrome_options.add_argument("--disable-popup-blocking")
         
         # Add user agent to appear more human-like
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
         chrome_options.add_argument(f"user-agent={user_agent}")
+        
+        # Disguise automation to avoid detection
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         
         # Create a unique temporary user data directory
         temp_user_data_dir = tempfile.mkdtemp()
@@ -74,21 +77,20 @@ class AdClicker:
             actions = ActionChains(self.driver)
             viewport_width = self.driver.execute_script("return window.innerWidth")
             viewport_height = self.driver.execute_script("return window.innerHeight")
+            print(f"Viewport size: {viewport_width}x{viewport_height}")  # Debug viewport size
             
-            # Random movement points (keeping within 80% of viewport to avoid edge issues)
+            # Random movement points (keeping within 80% of viewport)
             max_x = int(viewport_width * 0.8)
             max_y = int(viewport_height * 0.8)
-            
             points = [(random.randint(10, max_x), random.randint(10, max_y)) for _ in range(2)]
             
             for x, y in points:
+                print(f"Moving to ({x}, {y})")  # Debug coordinates
                 actions.move_by_offset(x, y).perform()
                 self.human_like_delay(0.5, 1)
-                # Move back to center to avoid going off-screen
                 actions.move_to_element(self.driver.find_element(By.TAG_NAME, "body")).perform()
         except Exception as e:
             print(f"Error during mouse movement: {e}")
-            # Reset mouse position as a fallback
             try:
                 actions = ActionChains(self.driver)
                 actions.move_to_element(self.driver.find_element(By.TAG_NAME, "body")).perform()
@@ -356,84 +358,60 @@ class AdClicker:
            
     def find_and_click_ads(self, in_iframe=False):
         """Find various types of ad elements and click on them with improved click handling."""
-        # Reset return value
         clicked = False
-        
         try:
-            # Find potential ad elements
             ad_elements = self.find_ad_elements()
-            
             if not ad_elements:
                 if not in_iframe:
                     print("No eligible ad elements found in the main document")
                 return False
-                
-            # Sort elements by priority (high first)
-            ad_elements.sort(key=lambda x: 0 if x["priority"] == "high" else 1)
             
-            # Try clicking on random elements, preferring high priority ones
+            ad_elements.sort(key=lambda x: 0 if x["priority"] == "high" else 1)
             for i in range(min(3, len(ad_elements))):
-                # Get a random element with bias towards high priority
                 if i == 0 and any(elem["priority"] == "high" for elem in ad_elements):
-                    # Only choose from high priority elements
                     high_priority_elements = [elem for elem in ad_elements if elem["priority"] == "high"]
                     element_data = random.choice(high_priority_elements)
                 else:
-                    # Choose from any element
                     element_data = random.choice(ad_elements)
-                    ad_elements.remove(element_data)  # Don't select the same element twice
+                    ad_elements.remove(element_data)
                 
                 element = element_data["element"]
                 selector = element_data["selector"]
                 
-                # Try to scroll element into view with better error handling
                 try:
-                    # Check if element is still valid
-                    _ = element.is_enabled()  # This will throw if element is stale
-                    
+                    _ = element.is_enabled()
                     self.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", element)
                     self.human_like_delay(1, 2)
                 except (StaleElementReferenceException, WebDriverException) as e:
                     print(f"Element became stale, skipping: {e}")
                     continue
                 
-                # Try to perform a human-like click
                 try:
                     self.click_count += 1
                     print(f"Attempting to click {selector} element (attempt #{self.click_count})")
                     
-                    # Hover over the element first
-                    try:
-                        actions = ActionChains(self.driver)
-                        actions.move_to_element(element).perform()
-                        self.human_like_delay(0.5, 1)
-                    except Exception as hover_error:
-                        print(f"Hover failed: {hover_error}")
+                    actions = ActionChains(self.driver)
+                    actions.move_to_element(element).perform()
+                    self.human_like_delay(0.5, 1)
                     
-                    # Try to wait for element to be clickable
                     try:
                         WebDriverWait(self.driver, 2).until(
                             EC.element_to_be_clickable((By.XPATH, element.get_attribute("xpath")))
                         )
                     except:
-                        pass  # Continue even if wait fails
+                        pass
                     
-                    # Click the element
                     element.click()
                     print("✓ Click successful! ✓")
                     self.successful_clicks += 1
                     self.human_like_delay(1.5, 3)
-                    
-                    # Handle any new windows/tabs that opened
                     self.handle_new_windows()
-                    
-                    # Return after successful click to allow page to change
                     clicked = True
                     break
-                    
-                except (ElementNotInteractableException, StaleElementReferenceException) as e:
+                
+                except (ElementNotInteractableException, StaleElementReferenceException, ElementClickInterceptedException) as e:
                     print(f"Could not interact with element: {e}")
-                    # Try JavaScript click as fallback
+                    # Fallback to JavaScript click
                     try:
                         self.driver.execute_script("arguments[0].click();", element)
                         print("✓ JavaScript click successful! ✓")
@@ -444,8 +422,7 @@ class AdClicker:
                         break
                     except Exception as js_e:
                         print(f"JavaScript click failed: {js_e}")
-                        
-                        # One more attempt: try to click at element's coordinates
+                        # Final attempt with ActionChains
                         try:
                             actions = ActionChains(self.driver)
                             actions.move_to_element(element)
@@ -462,9 +439,7 @@ class AdClicker:
             
             if not clicked and not in_iframe:
                 print("Could not click any elements in the main document")
-                
             return clicked
-                
         except Exception as e:
             print(f"Error processing ad elements: {e}")
             return False
