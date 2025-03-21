@@ -33,7 +33,10 @@ class AdClicker:
         """Set up the Chrome WebDriver with appropriate options."""
         chrome_options = Options()
         
-        
+        # Enable headless mode in CI environment
+        if os.getenv('CI') == 'true':
+            chrome_options.add_argument("--headless")
+
         #chrome_options.add_argument("--headless")
         
         chrome_options.add_argument("--start-maximized")
