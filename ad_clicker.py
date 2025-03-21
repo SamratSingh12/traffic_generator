@@ -31,7 +31,7 @@ class AdClicker:
     def setup_driver(self):
         """Set up the Chrome WebDriver with appropriate options."""
         chrome_options = Options()
-        chrome_options.add_argument("--headless")  # Enable headless mode for CI environment
+        #chrome_options.add_argument("--headless")  # Enable headless mode for CI environment
         chrome_options.add_argument("--start-maximized")
         chrome_options.add_argument("--disable-notifications")
         chrome_options.add_argument("--disable-gpu")  # Helps with Windows issues
