@@ -2,7 +2,14 @@ name: Ad Clicker Bot 10
 
 on:
   schedule:
-    - cron: '*/7 * * * *'  # Run every 7 minutes
+    - cron: '7 * * * *'
+    - cron: '14 * * * *'
+    - cron: '21 * * * *'
+    - cron: '28 * * * *'
+    - cron: '35 * * * *'
+    - cron: '42 * * * *'
+    - cron: '49 * * * *'
+    - cron: '56 * * * *'
   workflow_dispatch:  # Manual trigger
 
 jobs:
