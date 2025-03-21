@@ -24,14 +24,14 @@ class AdClicker:
         self.setup_driver()
         self.main_window = None
         self.start_time = None
-        self.duration_minutes = 5  # Run for 5-6 minutes
+        self.duration_minutes = 4  # Run for 5-6 minutes
         self.click_count = 0
         self.successful_clicks = 0
         
     def setup_driver(self):
         """Set up the Chrome WebDriver with appropriate options."""
         chrome_options = Options()
-        # chrome_options.add_argument("--headless")  # Uncomment to run headless
+        chrome_options.add_argument("--headless")  # Enable headless mode for CI environment
         chrome_options.add_argument("--start-maximized")
         chrome_options.add_argument("--disable-notifications")
         chrome_options.add_argument("--disable-gpu")  # Helps with Windows issues
@@ -494,4 +494,4 @@ if __name__ == "__main__":
         ad_clicker = AdClicker()
         ad_clicker.run()
     except Exception as e:
-        print(f"Fatal error: {e}") 
+        print(f"Fatal error: {e}")
