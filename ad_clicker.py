@@ -24,9 +24,10 @@ class AdClicker:
         self.setup_driver()
         self.main_window = None
         self.start_time = None
-        self.duration_minutes = 4  # Run for 5-6 minutes
+        self.duration_minutes = 4  # Run for 4 minutes
         self.click_count = 0
         self.successful_clicks = 0
+        self.processed_iframes = set()  # Track processed iframes to avoid duplicates
         
     def setup_driver(self):
         """Set up the Chrome WebDriver with appropriate options."""
@@ -118,7 +119,7 @@ class AdClicker:
                 
             # Check if element has size (not zero width/height)
             size = element.size
-            if size['width'] == 0 or size['height'] == 0:
+            if size['width'] < 5 or size['height'] < 5:  # Increased minimum size check
                 return False
                 
             # Get element location
@@ -137,20 +138,79 @@ class AdClicker:
                 element_x > viewport_width or element_y > viewport_height):
                 # Element is outside viewport
                 return False
+            
+            # Check if element is clickable using parent visibility
+            if self.is_covered_by_other_element(element):
+                return False
                 
             return True
         except (StaleElementReferenceException, WebDriverException):
             return False
+    
+    def is_covered_by_other_element(self, element):
+        """Check if the element is covered by another element that would receive the click instead."""
+        try:
+            # Get element coordinates
+            location = element.location
+            size = element.size
             
-    def switch_to_iframe_recursively(self, iframe_index=0, max_depth=5, current_depth=0):
-        """Recursively switch to iframes to find ad content."""
+            # Calculate center point of the element
+            center_x = location['x'] + size['width'] / 2
+            center_y = location['y'] + size['height'] / 2
+            
+            # Use JavaScript to check what element is at this position
+            element_at_position = self.driver.execute_script(
+                "return document.elementFromPoint(arguments[0], arguments[1]);", 
+                center_x, center_y
+            )
+            
+            # Check if the element at position is the same as or contains our target element
+            if element_at_position:
+                # Try to compare the elements
+                is_same = self.driver.execute_script(
+                    "return arguments[0] === arguments[1] || arguments[0].contains(arguments[1]) || arguments[1].contains(arguments[0]);",
+                    element, element_at_position
+                )
+                return not is_same
+            
+            return True  # If no element at position, assume covered
+        except Exception as e:
+            print(f"Error checking if element is covered: {e}")
+            return True  # Safer to assume it's covered
+            
+    def get_iframe_identifier(self, iframe):
+        """Generate a unique identifier for an iframe to avoid processing duplicates."""
+        try:
+            src = iframe.get_attribute("src") or ""
+            id_attr = iframe.get_attribute("id") or ""
+            class_attr = iframe.get_attribute("class") or ""
+            return f"{src}|{id_attr}|{class_attr}"
+        except:
+            # Generate a random ID if attributes can't be accessed
+            return f"iframe_{random.randint(1000, 9999)}"
+
+    def switch_to_iframe_recursively(self, iframe_index=0, max_depth=3, current_depth=0, iframe_path=None):
+        """Recursively switch to iframes to find ad content with improved tracking."""
         if current_depth >= max_depth:
             return False
+            
+        if iframe_path is None:
+            iframe_path = []
             
         try:
             # Switch back to main content first
             self.driver.switch_to.default_content()
             
+            # Follow the path to the current iframe
+            for idx in iframe_path:
+                iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
+                if idx < len(iframes):
+                    self.driver.switch_to.frame(iframes[idx])
+                else:
+                    # Path is invalid, reset to main content
+                    self.driver.switch_to.default_content()
+                    return False
+                    
             # Get all iframes in the current document
             iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
             
@@ -158,9 +218,20 @@ class AdClicker:
             if not iframes or iframe_index >= len(iframes):
                 return False
                 
+            # Get iframe identifier
+            current_iframe = iframes[iframe_index]
+            iframe_id = self.get_iframe_identifier(current_iframe)
+            
+            # Skip if already processed
+            if iframe_id in self.processed_iframes:
+                return False
+                
+            # Mark as processed
+            self.processed_iframes.add(iframe_id)
+                
             # Switch to the iframe at the specified index
-            self.driver.switch_to.frame(iframes[iframe_index])
-            print(f"Switched to iframe {iframe_index}")
+            self.driver.switch_to.frame(current_iframe)
+            print(f"Switched to iframe {iframe_index} at depth {current_depth}")
             
             # Try to find ads in this iframe
             found_ads = self.find_and_click_ads(in_iframe=True)
@@ -172,11 +243,25 @@ class AdClicker:
             nested_iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
             
             for i in range(len(nested_iframes)):
-                if self.switch_to_iframe_recursively(i, max_depth, current_depth + 1):
+                # Build new path
+                new_path = iframe_path.copy()
+                new_path.append(iframe_index)
+                
+                if self.switch_to_iframe_recursively(i, max_depth, current_depth + 1, new_path):
                     return True
                     
             # Switch back to parent frame before returning
-            self.driver.switch_to.parent_frame()
+            if iframe_path:
+                # Return to main content and follow path except last entry
+                self.driver.switch_to.default_content()
+                for idx in iframe_path:
+                    iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
+                    if idx < len(iframes):
+                        self.driver.switch_to.frame(iframes[idx])
+            else:
+                # If at top level, return to main content
+                self.driver.switch_to.default_content()
+                
             return False
             
         except Exception as e:
@@ -186,7 +271,7 @@ class AdClicker:
             return False
             
     def find_ad_elements(self):
-        """Find potential ad elements on the page."""
+        """Find potential ad elements on the page with improved selectors."""
         # Common ad selectors (high priority)
         high_priority_selectors = [
             "[id*='google_ads']", 
@@ -207,7 +292,12 @@ class AdClicker:
             "iframe[id*='ad']",
             "iframe[src*='doubleclick']",
             "iframe[src*='googlead']",
-            "div[aria-label*='Advertisement']"
+            "div[aria-label*='Advertisement']",
+            "[class*='adsbygoogle']",
+            "[id*='adsbygoogle']",
+            "[class*='adv']",
+            "[id*='adv']",
+            "ins.adsbygoogle"
         ]
         
         # Secondary selectors (generic clickable elements that might be ads)
@@ -222,7 +312,11 @@ class AdClicker:
             "a img", # Images inside links are often ads
             "button:not([disabled])",
             "[role='button']",
-            "a.external"
+            "a.external",
+            "div > a > img",  # Common ad structure
+            ".adContainer",
+            "[class*='adContainer']",
+            "[id*='adContainer']"
         ]
         
         # Combine selectors with priority
@@ -235,7 +329,7 @@ class AdClicker:
                 for element in elements:
                     if self.is_element_clickable(element):
                         all_elements.append({"element": element, "selector": selector, "priority": "high"})
-            except Exception as e:
+            except Exception:
                 continue
                 
         # Then check secondary selectors
@@ -245,13 +339,13 @@ class AdClicker:
                 for element in elements:
                     if self.is_element_clickable(element):
                         all_elements.append({"element": element, "selector": selector, "priority": "low"})
-            except Exception as e:
+            except Exception:
                 continue
                 
         return all_elements
            
     def find_and_click_ads(self, in_iframe=False):
-        """Find various types of ad elements and click on them."""
+        """Find various types of ad elements and click on them with improved click handling."""
         # Reset return value
         clicked = False
         
@@ -282,12 +376,15 @@ class AdClicker:
                 element = element_data["element"]
                 selector = element_data["selector"]
                 
-                # Try to scroll element into view
+                # Try to scroll element into view with better error handling
                 try:
+                    # Check if element is still valid
+                    _ = element.is_enabled()  # This will throw if element is stale
+                    
                     self.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", element)
                     self.human_like_delay(1, 2)
-                except Exception as e:
-                    print(f"Error scrolling to element: {e}")
+                except (StaleElementReferenceException, WebDriverException) as e:
+                    print(f"Element became stale, skipping: {e}")
                     continue
                 
                 # Try to perform a human-like click
@@ -302,6 +399,14 @@ class AdClicker:
                         self.human_like_delay(0.5, 1)
                     except Exception as hover_error:
                         print(f"Hover failed: {hover_error}")
+                    
+                    # Try to wait for element to be clickable
+                    try:
+                        WebDriverWait(self.driver, 2).until(
+                            EC.element_to_be_clickable((By.XPATH, element.get_attribute("xpath")))
+                        )
+                    except:
+                        pass  # Continue even if wait fails
                     
                     # Click the element
                     element.click()
@@ -329,6 +434,21 @@ class AdClicker:
                         break
                     except Exception as js_e:
                         print(f"JavaScript click failed: {js_e}")
+                        
+                        # One more attempt: try to click at element's coordinates
+                        try:
+                            actions = ActionChains(self.driver)
+                            actions.move_to_element(element)
+                            actions.click()
+                            actions.perform()
+                            print("✓ Action chain click successful! ✓")
+                            self.successful_clicks += 1
+                            self.human_like_delay(1.5, 3)
+                            self.handle_new_windows()
+                            clicked = True
+                            break
+                        except Exception as ac_e:
+                            print(f"Action chain click failed: {ac_e}")
             
             if not clicked and not in_iframe:
                 print("Could not click any elements in the main document")
@@ -340,12 +460,17 @@ class AdClicker:
             return False
         
     def handle_new_windows(self):
-        """Check for and close any new browser tabs/windows."""
+        """Check for and close any new browser tabs/windows with improved handling."""
         try:
             current_handles = self.driver.window_handles
             
             if len(current_handles) > 1:
                 print(f"Detected {len(current_handles) - 1} new windows/tabs")
+                
+                # Make sure main_window is still valid
+                if self.main_window not in current_handles:
+                    print("Main window has changed, updating reference")
+                    self.main_window = current_handles[0]
                 
                 # Switch back to main window first to ensure it's not closed
                 self.driver.switch_to.window(self.main_window)
@@ -353,32 +478,53 @@ class AdClicker:
                 # Close all other windows/tabs
                 for handle in current_handles:
                     if handle != self.main_window:
-                        self.driver.switch_to.window(handle)
-                        print("Closing new tab/window")
-                        self.human_like_delay(1, 2)
-                        
-                        # Take an action on the new page before closing (shows more human-like behavior)
                         try:
-                            self.driver.execute_script("window.scrollBy(0, 100);")
-                            self.human_like_delay(0.5, 1)
-                        except:
-                            pass
+                            self.driver.switch_to.window(handle)
+                            print("Closing new tab/window")
+                            self.human_like_delay(1, 2)
                             
-                        self.driver.close()
+                            # Take an action on the new page before closing (shows more human-like behavior)
+                            try:
+                                self.driver.execute_script("window.scrollBy(0, 100);")
+                                self.human_like_delay(0.5, 1)
+                            except:
+                                pass
+                                
+                            self.driver.close()
+                        except Exception as window_e:
+                            print(f"Error handling window {handle}: {window_e}")
+                            continue
                         
                 # Switch back to main window
-                self.driver.switch_to.window(self.main_window)
+                try:
+                    self.driver.switch_to.window(self.main_window)
+                except Exception as e:
+                    print(f"Error switching back to main window: {e}")
+                    # If main window is gone, switch to first available window
+                    if current_handles:
+                        self.driver.switch_to.window(current_handles[0])
+                        self.main_window = current_handles[0]
         except Exception as e:
             print(f"Error handling new windows: {e}")
             # Try to get back to the main window
             try:
                 self.driver.switch_to.window(self.main_window)
             except:
-                pass
+                # If that fails, try to switch to the first window available
+                try:
+                    handles = self.driver.window_handles
+                    if handles:
+                        self.driver.switch_to.window(handles[0])
+                        self.main_window = handles[0]
+                except:
+                    pass
     
     def check_iframes_for_ads(self):
-        """Systematically check iframes for ads."""
+        """Systematically check iframes for ads with improved implementation."""
         try:
+            # Reset processed iframes for a fresh check
+            self.processed_iframes = set()
+            
             # Switch to main content first
             self.driver.switch_to.default_content()
             
@@ -391,11 +537,21 @@ class AdClicker:
                 
             print(f"Found {len(iframes)} iframes to check")
             
-            # Try each iframe
+            # Try direct iframe checking first
             for i in range(min(len(iframes), 5)):  # Limit to 5 iframes to avoid excessive checking
                 try:
                     self.driver.switch_to.default_content()
-                    self.driver.switch_to.frame(iframes[i])
+                    current_iframe = iframes[i]
+                    iframe_id = self.get_iframe_identifier(current_iframe)
+                    
+                    # Skip if already processed
+                    if iframe_id in self.processed_iframes:
+                        continue
+                        
+                    # Mark as processed
+                    self.processed_iframes.add(iframe_id)
+                    
+                    self.driver.switch_to.frame(current_iframe)
                     print(f"Checking iframe {i+1}/{min(len(iframes), 5)}")
                     
                     if self.find_and_click_ads(in_iframe=True):
@@ -406,6 +562,15 @@ class AdClicker:
                         
                 except Exception as e:
                     print(f"Error checking iframe {i+1}: {e}")
+            
+            # If direct iframe checking didn't work, try recursive checking
+            self.driver.switch_to.default_content()
+            for i in range(min(len(iframes), 3)):  # Limit depth for recursive checks
+                if self.switch_to_iframe_recursively(iframe_index=i):
+                    print(f"Successfully clicked an ad in recursive iframe check starting from iframe {i+1}")
+                    # Switch back to main content
+                    self.driver.switch_to.default_content()
+                    return True
                     
             # Switch back to main content
             self.driver.switch_to.default_content()
@@ -443,7 +608,10 @@ class AdClicker:
                 cycle_count += 1
                 print(f"\n--- Cycle {cycle_count} ---")
                 
-                # Occasionally refresh the page to get new ads (25% chance)
+                # Reset processed iframes for each cycle
+                self.processed_iframes = set()
+                
+                # Occasionally refresh the page to get new ads (25% chance after first cycle)
                 if cycle_count > 1 and random.random() < 0.25:
                     print("Refreshing the page to get new ads...")
                     self.driver.refresh()
