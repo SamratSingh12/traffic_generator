@@ -1,9 +1,9 @@
 import time
 import random
 import os
+import tempfile
 from datetime import datetime, timedelta
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
@@ -32,7 +32,11 @@ class AdClicker:
     def setup_driver(self):
         """Set up the Chrome WebDriver with appropriate options."""
         chrome_options = Options()
-        #chrome_options.add_argument("--headless")  # Enable headless mode for CI environment
+        
+        # Enable headless mode if running in CI environment
+        if os.getenv('CI') == 'true':
+            chrome_options.add_argument("--headless")
+        
         chrome_options.add_argument("--start-maximized")
         chrome_options.add_argument("--disable-notifications")
         chrome_options.add_argument("--disable-gpu")  # Helps with Windows issues
@@ -44,8 +48,12 @@ class AdClicker:
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
         chrome_options.add_argument(f"user-agent={user_agent}")
         
+        # Create a unique temporary user data directory
+        temp_user_data_dir = tempfile.mkdtemp()
+        print(f"Using temporary user data directory: {temp_user_data_dir}")
+        chrome_options.add_argument(f"--user-data-dir={temp_user_data_dir}")
+        
         try:
-            # Use Selenium 4's built-in driver manager
             print("Setting up Chrome driver...")
             self.driver = webdriver.Chrome(options=chrome_options)
             print("Browser successfully launched")

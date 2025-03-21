@@ -43,6 +43,4 @@ jobs:
       env:
         PYTHONUNBUFFERED: 1
       run: |
-        # Modify the script to run in headless mode
-        sed -i 's/# chrome_options.add_argument("--headless")/chrome_options.add_argument("--headless")/' ad_clicker.py
         python ad_clicker.py
